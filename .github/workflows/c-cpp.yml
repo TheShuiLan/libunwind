@@ -57,16 +57,18 @@ jobs:
           loongarch64-linux-gnu-gcc --version
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
+      # 生成 configure 脚本（必须，因为 git 源码不包含它）
+      - name: 生成 configure 脚本
+        run: autoreconf -i
+
       # 动态库编译（使用 autotools，仅生成共享库）
       - name: 编译 libunwind 动态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
-          # 清理并创建构建目录
           rm -rf build-shared
           mkdir -p build-shared && cd build-shared
           
-          # 根据目标架构设置 --host 参数
           case ${TARGET} in
             x86_64-linux-gnu)      HOST_ARG="" ;;
             aarch64-linux-gnu)     HOST_ARG="--host=aarch64-linux-gnu" ;;
@@ -75,16 +77,12 @@ jobs:
             loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
           
-          # 运行 configure，强制生成共享库，禁用静态库
           ../configure $HOST_ARG \
             --enable-shared \
             --disable-static \
             --prefix=$(pwd)/install
-          
-          # 编译
           make -j$(nproc)
           
-          # 列出产物（通常位于 .libs 目录）
           echo "动态库产物列表："
           find . -name "*.so*" -type f
 
@@ -93,11 +91,9 @@ jobs:
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
-          # 清理并创建构建目录
           rm -rf build-static
           mkdir -p build-static && cd build-static
           
-          # 根据目标架构设置 --host 参数
           case ${TARGET} in
             x86_64-linux-gnu)      HOST_ARG="" ;;
             aarch64-linux-gnu)     HOST_ARG="--host=aarch64-linux-gnu" ;;
@@ -106,20 +102,16 @@ jobs:
             loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
           
-          # 运行 configure，强制生成静态库，禁用共享库
           ../configure $HOST_ARG \
             --enable-static \
             --disable-shared \
             --prefix=$(pwd)/install
-          
-          # 编译
           make -j$(nproc)
           
-          # 列出产物（通常位于 .libs 目录）
           echo "静态库产物列表："
           find . -name "*.a" -type f
 
-      # 上传动态库产物（修复路径：递归匹配 .libs 目录）
+      # 上传动态库产物
       - name: 上传动态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -130,7 +122,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # 上传静态库产物（修复路径：递归匹配 .libs 目录）
+      # 上传静态库产物
       - name: 上传静态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -139,7 +131,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # 合并上传（同时包含 .so 和 .a）
+      # 合并上传
       - name: 合并上传静态+动态库产物
         uses: actions/upload-artifact@v4
         with:
@@ -150,7 +142,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # 创建 Release 并上传所有产物（使用递归匹配）
+      # 创建 Release 并上传
       - name: 创建 Release 并上传所有产物
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
