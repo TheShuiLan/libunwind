@@ -1,60 +1,117 @@
-name: Build libunwind
-on: [push, pull_request]
+name: 手动触发 libunwind 编译并上传产物
+
+# 核心：开启手动触发 + 可选的 push/pr 触发
+on:
+  workflow_dispatch:  # 手动触发开关（关键）
+    inputs:
+      target_arch:    # 手动触发时可选择编译架构
+        description: '编译目标架构'
+        required: true
+        default: 'x86_64-linux-gnu'
+        type: choice
+        options:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - arm-linux-gnueabihf
+          - s390x-linux-gnu
+          - loongarch64-linux-gnu
+      build_type:
+        description: '编译类型（静态/动态）'
+        required: true
+        default: 'shared'
+        type: choice
+        options:
+          - shared  # 动态库（默认）
+          - static  # 静态库
+
+# 权限配置：允许上传产物、读取仓库
+permissions:
+  contents: read
+  actions: write
+  artifacts: write
 
 jobs:
-  build:
+  build-and-upload:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x86_64, aarch64, arm, riscv64] # 按需选择架构
     steps:
-      - name: Checkout code
+      # 1. 拉取源码
+      - name: 检出 libunwind 源码
         uses: actions/checkout@v4
         with:
-          repository: libunwind/libunwind # 拉取官方仓库
+          repository: libunwind/libunwind  # 拉取官方仓库
           fetch-depth: 1
 
-      - name: Install dependencies
+      # 2. 安装编译依赖
+      - name: 安装交叉编译工具链和依赖
         run: |
           sudo apt update && sudo apt install -y \
-            cmake gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
-            gcc-riscv64-linux-gnu crossbuild-essential-arm64 \
-            crossbuild-essential-armhf crossbuild-essential-riscv64
+            cmake gcc make libc6-dev \
+            # 全架构交叉编译依赖（按需安装）
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+            gcc-s390x-linux-gnu gcc-loongarch64-linux-gnu \
+            crossbuild-essential-arm64 crossbuild-essential-armhf
 
-      - name: Configure CMake (x86_64)
-        if: matrix.arch == 'x86_64'
+      # 3. 配置 CMake 并编译
+      - name: 编译 libunwind（${{ github.event.inputs.target_arch }}）
+        env:
+          TARGET: ${{ github.event.inputs.target_arch }}  # 传递架构参数
         run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=x86_64-linux-gnu
-
-      - name: Configure CMake (aarch64)
-        if: matrix.arch == 'aarch64'
-        run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=aarch64-linux-gnu \
-            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
-
-      - name: Configure CMake (arm)
-        if: matrix.arch == 'arm'
-        run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=arm-linux-gnueabihf \
-            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc
-
-      - name: Configure CMake (riscv64)
-        if: matrix.arch == 'riscv64'
-        run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=loongarch64-linux-gnu \ # 注意：riscv64需适配源码中TARGET定义
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc
-
-      - name: Build
-        run: |
-          cd build
+          # 创建构建目录
+          mkdir -p build && cd build
+          
+          # 配置 CMake（区分静态/动态、架构）
+          CMAKE_ARGS=(
+            -DCMAKE_C_STANDARD=11
+            -DTARGET=${TARGET}
+            -DCMAKE_BUILD_TYPE=Release
+          )
+          # 静态库编译开关
+          if [ "${{ github.event.inputs.build_type }}" = "static" ]; then
+            CMAKE_ARGS+=(-DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF)
+          fi
+          
+          # 交叉编译：指定对应架构编译器
+          case ${TARGET} in
+            aarch64-linux-gnu)
+              CMAKE_ARGS+=(-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc)
+              ;;
+            arm-linux-gnueabihf)
+              CMAKE_ARGS+=(-DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc)
+              ;;
+            s390x-linux-gnu)
+              CMAKE_ARGS+=(-DCMAKE_C_COMPILER=s390x-linux-gnu-gcc)
+              ;;
+            loongarch64-linux-gnu)
+              CMAKE_ARGS+=(-DCMAKE_C_COMPILER=loongarch64-linux-gnu-gcc)
+              ;;
+          esac
+          
+          # 执行配置和编译
+          cmake .. "${CMAKE_ARGS[@]}"
           make -j$(nproc)
 
-      - name: Upload build artifacts
+      # 4. 上传编译产物（支持多架构、静态/动态）
+      - name: 上传编译产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libunwind-${{ matrix.arch }}
-          path: build/src/*.so*
+          name: libunwind-${{ github.event.inputs.target_arch }}-${{ github.event.inputs.build_type }}
+          path: |
+            build/src/*.so*          # 动态库
+            build/src/*.a            # 静态库
+            build/src/*.so.*         # 动态库版本文件
+          retention-days: 90  # 产物保留90天（可调整）
+
+      # 可选：上传产物到 GitHub Release（如需长期存储）
+      - name: 创建临时 Release 并上传产物
+        if: github.ref == 'refs/heads/main'  # 仅主分支触发
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
+          name: 手动编译产物-${{ github.event.inputs.target_arch }}-${{ github.event.inputs.build_type }}
+          files: |
+            build/src/*.so*
+            build/src/*.a
+          draft: true  # 草稿版本（避免污染正式Release）
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
