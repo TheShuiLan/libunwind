@@ -1,73 +1,155 @@
-name: Build libunwind
+name: 手动触发 libunwind 编译并上传产物
+
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: '编译目标架构'
+        required: true
+        default: 'x86_64-linux-gnu'
+        type: choice
+        options:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - arm-linux-gnueabihf
+          - s390x-linux-gnu
+          - loongarch64-linux-gnu
+
+permissions:
+  contents: write
+  actions: write
+  packages: read
 
 jobs:
-  build:
+  build-and-upload:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [
-          x86_64-linux-gnu,
-          aarch64-linux-gnu,
-          arm-linux-gnueabihf,
-          s390x-linux-gnu,
-          loongarch64-linux-gnu
-        ]
-
     steps:
-      - name: Checkout code
+      - name: 检出 libunwind 源码
         uses: actions/checkout@v4
         with:
-          path: libunwind
+          fetch-depth: 1
 
-      - name: Install dependencies
+      - name: 安装基础依赖和主流架构交叉编译工具链
         run: |
-          sudo apt update
-          # 安装编译依赖（修复 texinfo 传递错误，提前安装）
-          sudo apt install -y cmake gcc g++ texinfo libtool autoconf automake pkg-config
-          # 安装交叉编译工具链（按需）
-          case ${{ matrix.target }} in
-            aarch64-linux-gnu) sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ;;
-            arm-linux-gnueabihf) sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf ;;
-            s390x-linux-gnu) sudo apt install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu ;;
-            loongarch64-linux-gnu) sudo apt install -y gcc-loongarch64-linux-gnu g++-loongarch64-linux-gnu ;;
-          esac
+          sudo apt update && sudo apt install -y \
+            cmake gcc make libc6-dev g++ bison flex texinfo \
+            libgmp3-dev libmpfr-dev libmpc-dev autoconf automake libtool patch wget \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-s390x-linux-gnu \
+            crossbuild-essential-arm64 crossbuild-essential-armhf
 
-      - name: Configure CMake
+      - name: 手动编译 loongarch64 交叉编译器（仅 loongarch64 架构）
+        if: github.event.inputs.target_arch == 'loongarch64-linux-gnu'
         run: |
-          cd libunwind
-          # 设置目标架构环境变量（修复 CMake 依赖的 TARGET 变量）
-          export TARGET=${{ matrix.target }}
-          # 创建构建目录（避免源码目录污染，修复路径错误）
+          mkdir -p ~/gcc-build && cd ~/gcc-build
+          wget https://ftp.gnu.org/gnu/gcc/gcc-12.2.0/gcc-12.2.0.tar.xz -q
+          tar -xf gcc-12.2.0.tar.xz && cd gcc-12.2.0
+          ./contrib/download_prerequisites -q
           mkdir -p build && cd build
-          # 执行 CMake（修复源码目录错误，移除多余参数）
-          cmake .. \
-            -DCMAKE_C_STANDARD=11 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=${{ matrix.target }}-gcc \
-            -DCMAKE_CXX_COMPILER=${{ matrix.target }}-g++
-
-      - name: Build libunwind
-        run: |
-          cd libunwind/build
-          # 多核编译
+          ../configure \
+            --prefix=/usr/local \
+            --target=loongarch64-linux-gnu \
+            --enable-languages=c \
+            --disable-multilib \
+            --disable-nls \
+            --disable-bootstrap
           make -j$(nproc)
+          sudo make install
+          loongarch64-linux-gnu-gcc --version
+          echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Verify build
+      # 动态库编译（修改点：增加产物列表调试）
+      - name: 编译 libunwind 动态库（${{ github.event.inputs.target_arch }}）
+        env:
+          TARGET: ${{ github.event.inputs.target_arch }}
         run: |
-          cd libunwind/build
-          # 检查编译产物
-          ls -l src/*.so || ls -l src/*.a
-          # 可选：运行测试（需提前安装测试依赖）
-          # make check
+          mkdir -p build-shared && cd build-shared
+          CMAKE_ARGS=(
+            -DCMAKE_C_STANDARD=11
+            -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_STATIC_LIBS=OFF
+          )
+          case ${TARGET} in
+            x86_64-linux-gnu)      CMAKE_ARGS+=(-DCMAKE_C_COMPILER=gcc) ;;
+            aarch64-linux-gnu)     CMAKE_ARGS+=(-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc) ;;
+            arm-linux-gnueabihf)   CMAKE_ARGS+=(-DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc) ;;
+            s390x-linux-gnu)       CMAKE_ARGS+=(-DCMAKE_C_COMPILER=s390x-linux-gnu-gcc) ;;
+            loongarch64-linux-gnu) CMAKE_ARGS+=(-DCMAKE_C_COMPILER=/usr/local/bin/loongarch64-linux-gnu-gcc) ;;
+          esac
+          cmake .. "${CMAKE_ARGS[@]}"
+          make -j$(nproc)
+          # 列出产物以便确认路径（关键调试信息）
+          echo "动态库产物列表："
+          find . -name "*.so*" -type f
 
-      - name: Upload artifacts
+      # 静态库编译
+      - name: 编译 libunwind 静态库（${{ github.event.inputs.target_arch }}）
+        env:
+          TARGET: ${{ github.event.inputs.target_arch }}
+        run: |
+          mkdir -p build-static && cd build-static
+          CMAKE_ARGS=(
+            -DCMAKE_C_STANDARD=11
+            -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_SHARED_LIBS=OFF
+            -DBUILD_STATIC_LIBS=ON
+          )
+          case ${TARGET} in
+            x86_64-linux-gnu)      CMAKE_ARGS+=(-DCMAKE_C_COMPILER=gcc) ;;
+            aarch64-linux-gnu)     CMAKE_ARGS+=(-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc) ;;
+            arm-linux-gnueabihf)   CMAKE_ARGS+=(-DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc) ;;
+            s390x-linux-gnu)       CMAKE_ARGS+=(-DCMAKE_C_COMPILER=s390x-linux-gnu-gcc) ;;
+            loongarch64-linux-gnu) CMAKE_ARGS+=(-DCMAKE_C_COMPILER=/usr/local/bin/loongarch64-linux-gnu-gcc) ;;
+          esac
+          cmake .. "${CMAKE_ARGS[@]}"
+          make -j$(nproc)
+          echo "静态库产物列表："
+          find . -name "*.a" -type f
+
+      # 上传动态库产物（修复路径：递归匹配）
+      - name: 上传动态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libunwind-${{ matrix.target }}
-          path: libunwind/build/src/
+          name: libunwind-${{ github.event.inputs.target_arch }}-shared
+          path: |
+            build-shared/**/*.so
+            build-shared/**/*.so.*
+          if-no-files-found: warn
+          retention-days: 90
+
+      # 上传静态库产物（修复路径：递归匹配）
+      - name: 上传静态库产物到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ github.event.inputs.target_arch }}-static
+          path: build-static/**/*.a
+          if-no-files-found: warn
+          retention-days: 90
+
+      # 合并上传（修复路径）
+      - name: 合并上传静态+动态库产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ github.event.inputs.target_arch }}-all
+          path: |
+            build-shared/**/*.so
+            build-shared/**/*.so.*
+            build-static/**/*.a
+          if-no-files-found: warn
+          retention-days: 90
+
+      # 创建 Release 并上传所有产物（修复路径）
+      - name: 创建 Release 并上传所有产物
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
+          name: 手动编译产物-${{ github.event.inputs.target_arch }}（静态+动态）
+          files: |
+            build-shared/**/*.so*
+            build-static/**/*.a
+          draft: true
+          prerelease: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
