@@ -30,26 +30,23 @@ jobs:
 
       - name: 下载并配置 Android NDK
         run: |
-          # 使用官方 NDK r26c 链接（若仍失效，可尝试替换为国内镜像源）
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
           unzip -q android-ndk-r26c-linux.zip
           echo "NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: 下载并解压 libunwindstack 源码
+      # 修复点 1：改回完整克隆，确保包含所有汇编文件
+      - name: 克隆 libunwindstack 源码
         run: |
-          # 直接下载指定的 tar.gz 归档文件
-          wget -q https://android.googlesource.com/platform/system/unwinding/+archive/refs/heads/main/libunwindstack.tar.gz
-          # 创建目标目录并解压（注意：tar.gz 内部通常直接是源码文件，不带上层目录）
-          mkdir -p libunwindstack
-          tar -xzf libunwindstack.tar.gz -C libunwindstack
+          git clone https://android.googlesource.com/platform/system/unwinding
+          cd unwinding/libunwindstack
 
       - name: 创建 CMakeLists.txt（启用 Dex/JIT）
-        working-directory: libunwindstack
+        working-directory: unwinding/libunwindstack
         run: |
           cat > CMakeLists.txt << 'EOF'
-          cmake_minimum_required(VERSION 3.10)
-          project(libunwindstack VERSION 1.0.0 LANGUAGES C CXX)
+          cmake_minimum_required(VERSION 3.19) # 修复点 2：提高版本号以消除 NDK 弃用警告
+          project(libunwindstack VERSION 1.0.0 LANGUAGES C CXX ASM) # 修复点 3：显式启用 ASM 语言支持
 
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,7 +59,7 @@ jobs:
             ${CMAKE_CURRENT_SOURCE_DIR}/utils
           )
 
-          # 所有源文件（启用所有可选模块）
+          # 所有源文件
           set(SOURCES
             AndroidLogStdout.cpp
             AndroidUnwinder.cpp
@@ -109,9 +106,8 @@ jobs:
             list(APPEND SOURCES AsmGetRegsX86.S)
           endif()
 
-          # 可选模块（默认全部启用）
-          option(ENABLE_XZ "Enable Xz support (requires liblzma)" ON)
-
+          # 禁用 XZ 支持以避免寻找 liblzma（修复点 4）
+          option(ENABLE_XZ "Enable Xz support" OFF)
           if(NOT ENABLE_XZ)
             list(REMOVE_ITEM SOURCES MemoryXz.cpp)
           endif()
@@ -121,17 +117,6 @@ jobs:
 
           # 链接库
           target_link_libraries(unwindstack log)
-          if(ENABLE_XZ)
-            # NDK 中可能没有 lzma，如果找不到，会链接失败
-            find_library(LZMA_LIB lzma)
-            if(LZMA_LIB)
-              target_link_libraries(unwindstack ${LZMA_LIB})
-              target_compile_definitions(unwindstack PRIVATE HAVE_LZMA)
-            else()
-              message(WARNING "liblzma not found; XZ support will be disabled")
-              target_compile_definitions(unwindstack PRIVATE DISABLE_XZ)
-            endif()
-          endif()
 
           # 导出头文件
           target_include_directories(unwindstack PUBLIC
@@ -146,7 +131,7 @@ jobs:
       - name: 编译 libunwindstack（完整版）
         env:
           ABI: ${{ github.event.inputs.target_arch }}
-        working-directory: libunwindstack
+        working-directory: unwinding/libunwindstack
         run: |
           rm -rf build install
           mkdir build && cd build
@@ -169,8 +154,7 @@ jobs:
           cmake .. -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${NDK_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_PLATFORM=android-23 \
-            ${TOOLCHAIN_ARGS} \
-            -DENABLE_XZ=ON
+            ${TOOLCHAIN_ARGS}
 
           ninja
           mkdir -p ../install/lib
@@ -184,19 +168,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libunwindstack-${{ github.event.inputs.target_arch }}-static
-          path: libunwindstack/install/lib/libunwindstack.a
+          path: unwinding/libunwindstack/install/lib/libunwindstack.a
           if-no-files-found: error
           retention-days: 90
-
-      - name: 创建 Release 并上传产物
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
-          name: 完整编译产物-Android ${{ github.event.inputs.target_arch }}（libunwindstack）
-          files: libunwindstack/install/lib/libunwindstack.a
-          draft: true
-          prerelease: true
-          fail_on_unmatched_files: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
