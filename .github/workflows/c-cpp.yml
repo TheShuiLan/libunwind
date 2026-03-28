@@ -1,0 +1,60 @@
+name: Build libunwind
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64, arm, riscv64] # 按需选择架构
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: libunwind/libunwind # 拉取官方仓库
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y \
+            cmake gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+            gcc-riscv64-linux-gnu crossbuild-essential-arm64 \
+            crossbuild-essential-armhf crossbuild-essential-riscv64
+
+      - name: Configure CMake (x86_64)
+        if: matrix.arch == 'x86_64'
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=x86_64-linux-gnu
+
+      - name: Configure CMake (aarch64)
+        if: matrix.arch == 'aarch64'
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=aarch64-linux-gnu \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+
+      - name: Configure CMake (arm)
+        if: matrix.arch == 'arm'
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=arm-linux-gnueabihf \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc
+
+      - name: Configure CMake (riscv64)
+        if: matrix.arch == 'riscv64'
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_C_STANDARD=11 -DTARGET=loongarch64-linux-gnu \ # 注意：riscv64需适配源码中TARGET定义
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc
+
+      - name: Build
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ matrix.arch }}
+          path: build/src/*.so*
