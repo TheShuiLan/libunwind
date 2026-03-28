@@ -57,11 +57,10 @@ jobs:
           loongarch64-linux-gnu-gcc --version
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
-      # 生成 configure 脚本（必须，因为 git 源码不包含它）
       - name: 生成 configure 脚本
         run: autoreconf -i
 
-      # 动态库编译（使用 autotools，仅生成共享库）
+      # 动态库编译
       - name: 编译 libunwind 动态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
@@ -83,10 +82,18 @@ jobs:
             --prefix=$(pwd)/install
           make -j$(nproc)
           
-          echo "动态库产物列表："
-          find . -name "*.so*" -type f
+          echo "========== 动态库构建目录内容 =========="
+          ls -R
+          echo "========== 查找 .so 文件 =========="
+          find . -name "*.so*" -type f || true
+          
+          # 如果没有找到任何 .so 文件，则报错退出
+          if [ -z "$(find . -name '*.so*' -type f)" ]; then
+            echo "错误：未生成任何动态库文件！"
+            exit 1
+          fi
 
-      # 静态库编译（使用 autotools，仅生成静态库）
+      # 静态库编译
       - name: 编译 libunwind 静态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
@@ -108,37 +115,45 @@ jobs:
             --prefix=$(pwd)/install
           make -j$(nproc)
           
-          echo "静态库产物列表："
-          find . -name "*.a" -type f
+          echo "========== 静态库构建目录内容 =========="
+          ls -R
+          echo "========== 查找 .a 文件 =========="
+          find . -name "*.a" -type f || true
+          
+          # 如果没有找到任何 .a 文件，则报错退出
+          if [ -z "$(find . -name '*.a' -type f)" ]; then
+            echo "错误：未生成任何静态库文件！"
+            exit 1
+          fi
 
-      # 上传动态库产物
+      # 上传动态库产物（根据实际路径调整）
       - name: 上传动态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-shared
           path: |
-            build-shared/**/.libs/*.so
-            build-shared/**/.libs/*.so.*
+            build-shared/**/*.so
+            build-shared/**/*.so.*
           if-no-files-found: warn
           retention-days: 90
 
-      # 上传静态库产物
+      # 上传静态库产物（根据实际路径调整）
       - name: 上传静态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-static
-          path: build-static/**/.libs/*.a
+          path: build-static/**/*.a
           if-no-files-found: warn
           retention-days: 90
 
-      # 合并上传
+      # 合并上传（使用通用递归匹配）
       - name: 合并上传静态+动态库产物
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-all
           path: |
-            build-shared/**/.libs/*.so*
-            build-static/**/.libs/*.a
+            build-shared/**/*.so*
+            build-static/**/*.a
           if-no-files-found: warn
           retention-days: 90
 
@@ -150,8 +165,8 @@ jobs:
           tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
           name: 手动编译产物-${{ github.event.inputs.target_arch }}（静态+动态）
           files: |
-            build-shared/**/.libs/*.so*
-            build-static/**/.libs/*.a
+            build-shared/**/*.so*
+            build-static/**/*.a
           draft: true
           prerelease: true
           fail_on_unmatched_files: false
