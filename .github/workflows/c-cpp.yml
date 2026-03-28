@@ -1,4 +1,4 @@
-name: 手动编译 libunwindstack（Android）
+name: 手动编译完整 libunwindstack（Android）
 
 on:
   workflow_dispatch:
@@ -30,20 +30,22 @@ jobs:
 
       - name: 下载并配置 Android NDK
         run: |
+          # 使用官方 NDK r26c 链接（若仍失效，可尝试替换为国内镜像源）
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
           unzip -q android-ndk-r26c-linux.zip
           echo "NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: 克隆 libunwindstack 源码
+      - name: 下载并解压 libunwindstack 源码
         run: |
-          git clone https://android.googlesource.com/platform/system/unwinding
-          cd unwinding/libunwindstack
-          # 只保留需要的源文件，移除复杂依赖的可选模块（通过后续 CMake 控制）
-          # 我们将在 CMakeLists.txt 中排除 DexFile、JitDebug、MemoryXz 等
+          # 直接下载指定的 tar.gz 归档文件
+          wget -q https://android.googlesource.com/platform/system/unwinding/+archive/refs/heads/main/libunwindstack.tar.gz
+          # 创建目标目录并解压（注意：tar.gz 内部通常直接是源码文件，不带上层目录）
+          mkdir -p libunwindstack
+          tar -xzf libunwindstack.tar.gz -C libunwindstack
 
-      - name: 创建 CMakeLists.txt
-        working-directory: unwinding/libunwindstack
+      - name: 创建 CMakeLists.txt（启用 Dex/JIT）
+        working-directory: libunwindstack
         run: |
           cat > CMakeLists.txt << 'EOF'
           cmake_minimum_required(VERSION 3.10)
@@ -60,12 +62,14 @@ jobs:
             ${CMAKE_CURRENT_SOURCE_DIR}/utils
           )
 
-          # 源文件列表（排除可选/复杂模块）
+          # 所有源文件（启用所有可选模块）
           set(SOURCES
             AndroidLogStdout.cpp
             AndroidUnwinder.cpp
             ArmExidx.cpp
             Demangle.cpp
+            DexFile.cpp
+            DexFiles.cpp
             DwarfCfa.cpp
             DwarfEhFrameWithHdr.cpp
             DwarfMemory.cpp
@@ -75,11 +79,13 @@ jobs:
             ElfInterface.cpp
             ElfInterfaceArm.cpp
             Global.cpp
+            JitDebug.cpp
             LogAndroid.cpp
             LogStdout.cpp
             MapInfo.cpp
             Maps.cpp
             Memory.cpp
+            MemoryXz.cpp
             Regs.cpp
             RegsArm.cpp
             RegsArm64.cpp
@@ -103,59 +109,60 @@ jobs:
             list(APPEND SOURCES AsmGetRegsX86.S)
           endif()
 
-          # 可选模块默认禁用（避免依赖）
-          option(ENABLE_DEX "Enable Dex support" OFF)
-          option(ENABLE_JIT "Enable JIT support" OFF)
-          option(ENABLE_XZ "Enable Xz support" OFF)
+          # 可选模块（默认全部启用）
+          option(ENABLE_XZ "Enable Xz support (requires liblzma)" ON)
 
-          if(ENABLE_DEX)
-            list(APPEND SOURCES DexFile.cpp DexFiles.cpp)
-          endif()
-          if(ENABLE_JIT)
-            list(APPEND SOURCES JitDebug.cpp)
-          endif()
-          if(ENABLE_XZ)
-            list(APPEND SOURCES MemoryXz.cpp)
+          if(NOT ENABLE_XZ)
+            list(REMOVE_ITEM SOURCES MemoryXz.cpp)
           endif()
 
           # 构建静态库
           add_library(unwindstack STATIC ${SOURCES})
 
-          # 链接 Android 日志库
+          # 链接库
           target_link_libraries(unwindstack log)
+          if(ENABLE_XZ)
+            # NDK 中可能没有 lzma，如果找不到，会链接失败
+            find_library(LZMA_LIB lzma)
+            if(LZMA_LIB)
+              target_link_libraries(unwindstack ${LZMA_LIB})
+              target_compile_definitions(unwindstack PRIVATE HAVE_LZMA)
+            else()
+              message(WARNING "liblzma not found; XZ support will be disabled")
+              target_compile_definitions(unwindstack PRIVATE DISABLE_XZ)
+            endif()
+          endif()
 
-          # 导出头文件路径（供使用者引用）
+          # 导出头文件
           target_include_directories(unwindstack PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
           )
 
-          # 安装规则
           install(TARGETS unwindstack ARCHIVE DESTINATION lib)
           install(DIRECTORY include/ DESTINATION include)
           EOF
 
-      - name: 编译 libunwindstack（${{ github.event.inputs.target_arch }}）
+      - name: 编译 libunwindstack（完整版）
         env:
           ABI: ${{ github.event.inputs.target_arch }}
-        working-directory: unwinding/libunwindstack
+        working-directory: libunwindstack
         run: |
           rm -rf build install
           mkdir build && cd build
 
-          # 根据 ABI 设置 CMake 工具链参数
           case ${ABI} in
             arm64-v8a)
-              TOOLCHAIN_ARGS="-DANDROID_ABI=arm64-v8a -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a -DCMAKE_ANDROID_NDK=${NDK_HOME}"
+              TOOLCHAIN_ARGS="-DANDROID_ABI=arm64-v8a -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a"
               ;;
             armeabi-v7a)
-              TOOLCHAIN_ARGS="-DANDROID_ABI=armeabi-v7a -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=armeabi-v7a -DCMAKE_ANDROID_NDK=${NDK_HOME}"
+              TOOLCHAIN_ARGS="-DANDROID_ABI=armeabi-v7a -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=armeabi-v7a"
               ;;
             x86_64)
-              TOOLCHAIN_ARGS="-DANDROID_ABI=x86_64 -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=x86_64 -DCMAKE_ANDROID_NDK=${NDK_HOME}"
+              TOOLCHAIN_ARGS="-DANDROID_ABI=x86_64 -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=x86_64"
               ;;
             x86)
-              TOOLCHAIN_ARGS="-DANDROID_ABI=x86 -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=x86 -DCMAKE_ANDROID_NDK=${NDK_HOME}"
+              TOOLCHAIN_ARGS="-DANDROID_ABI=x86 -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI=x86"
               ;;
           esac
 
@@ -163,9 +170,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=${NDK_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_PLATFORM=android-23 \
             ${TOOLCHAIN_ARGS} \
-            -DENABLE_DEX=OFF \
-            -DENABLE_JIT=OFF \
-            -DENABLE_XZ=OFF
+            -DENABLE_XZ=ON
 
           ninja
           mkdir -p ../install/lib
@@ -179,7 +184,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libunwindstack-${{ github.event.inputs.target_arch }}-static
-          path: unwinding/libunwindstack/install/lib/libunwindstack.a
+          path: libunwindstack/install/lib/libunwindstack.a
           if-no-files-found: error
           retention-days: 90
 
@@ -188,8 +193,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
-          name: 手动编译产物-Android ${{ github.event.inputs.target_arch }}（libunwindstack）
-          files: unwinding/libunwindstack/install/lib/libunwindstack.a
+          name: 完整编译产物-Android ${{ github.event.inputs.target_arch }}（libunwindstack）
+          files: libunwindstack/install/lib/libunwindstack.a
           draft: true
           prerelease: true
           fail_on_unmatched_files: false
