@@ -16,10 +16,10 @@ on:
           - s390x-linux-gnu
           - loongarch64-linux-gnu
 
+# 修正权限配置：移除无效的 artifacts 字段
 permissions:
   contents: read
-  actions: write
-  artifacts: write
+  actions: write  # 包含 Artifacts 上传/下载权限
 
 jobs:
   build-and-upload:
