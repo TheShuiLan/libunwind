@@ -1,48 +1,182 @@
- name: 编译并安装动态库（${{ github.event.inputs.target_arch }}）
-  env:
-    ABI: ${{ github.event.inputs.target_arch }}
-  run: |
-    rm -rf build-shared install-shared
-    mkdir -p build-shared install-shared
-    cd build-shared
+name: 手动触发 libunwind 编译并上传产物（Android）
 
-    # 根据 ABI 确定目标三元组和 API 级别
-    case ${ABI} in
-      arm64-v8a)
-        HOST="aarch64-linux-android"
-        API=23
-        ;;
-      armeabi-v7a)
-        HOST="armv7a-linux-androideabi"
-        API=23
-        ;;
-      x86_64)
-        HOST="x86_64-linux-android"
-        API=23
-        ;;
-      x86)
-        HOST="i686-linux-android"
-        API=23
-        ;;
-    esac
+on:
+  workflow_dispatch:
+    inputs:
+      target_arch:
+        description: '编译目标架构 (Android ABI)'
+        required: true
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - x86
 
-    export CC=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang
-    export CXX=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++
-    export AR=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-    export RANLIB=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-    export LD=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ld
-    export STRIP=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+permissions:
+  contents: write
+  actions: write
+  packages: read
 
-    ../configure \
-      --host=${HOST} \
-      --enable-shared \
-      --disable-static \
-      --prefix=$(pwd)/../install-shared \
-      CFLAGS="-D__ANDROID__ -fPIC" \
-      LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
+jobs:
+  build-android:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出 libunwind 源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-    make -j$(nproc)
-    make install
+      - name: 安装基础依赖
+        run: |
+          sudo apt update && sudo apt install -y \
+            autoconf automake libtool make cmake \
+            bison flex texinfo
 
-    echo "========== 动态库安装目录内容 =========="
-    find ../install-shared -type f
+      - name: 下载并配置 Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          echo "NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
+          echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: 生成 configure 脚本
+        run: autoreconf -i
+
+      - name: 编译并安装动态库（${{ github.event.inputs.target_arch }}）
+        env:
+          ABI: ${{ github.event.inputs.target_arch }}
+        run: |
+          rm -rf build-shared install-shared
+          mkdir -p build-shared install-shared
+          cd build-shared
+
+          case ${ABI} in
+            arm64-v8a)
+              HOST="aarch64-linux-android"
+              API=23
+              ;;
+            armeabi-v7a)
+              HOST="armv7a-linux-androideabi"
+              API=23
+              ;;
+            x86_64)
+              HOST="x86_64-linux-android"
+              API=23
+              ;;
+            x86)
+              HOST="i686-linux-android"
+              API=23
+              ;;
+          esac
+
+          export CC=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang
+          export CXX=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++
+          export AR=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          export RANLIB=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          export LD=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ld
+          export STRIP=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+
+          ../configure \
+            --host=${HOST} \
+            --enable-shared \
+            --disable-static \
+            --prefix=$(pwd)/../install-shared \
+            CFLAGS="-D__ANDROID__ -fPIC" \
+            LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
+
+          make -j$(nproc)
+          make install
+
+          echo "========== 动态库安装目录内容 =========="
+          find ../install-shared -type f
+
+      - name: 编译并安装静态库（${{ github.event.inputs.target_arch }}）
+        env:
+          ABI: ${{ github.event.inputs.target_arch }}
+        run: |
+          rm -rf build-static install-static
+          mkdir -p build-static install-static
+          cd build-static
+
+          case ${ABI} in
+            arm64-v8a)
+              HOST="aarch64-linux-android"
+              API=23
+              ;;
+            armeabi-v7a)
+              HOST="armv7a-linux-androideabi"
+              API=23
+              ;;
+            x86_64)
+              HOST="x86_64-linux-android"
+              API=23
+              ;;
+            x86)
+              HOST="i686-linux-android"
+              API=23
+              ;;
+          esac
+
+          export CC=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang
+          export CXX=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++
+          export AR=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          export RANLIB=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          export LD=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ld
+          export STRIP=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+
+          ../configure \
+            --host=${HOST} \
+            --enable-static \
+            --disable-shared \
+            --prefix=$(pwd)/../install-static \
+            CFLAGS="-D__ANDROID__ -fPIC" \
+            LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
+
+          make -j$(nproc)
+          make install
+
+          echo "========== 静态库安装目录内容 =========="
+          find ../install-static -type f
+
+      - name: 上传动态库产物到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ github.event.inputs.target_arch }}-shared
+          path: install-shared/lib/*.so*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 上传静态库产物到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ github.event.inputs.target_arch }}-static
+          path: install-static/lib/*.a
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 合并上传静态+动态库产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: libunwind-${{ github.event.inputs.target_arch }}-all
+          path: |
+            install-shared/lib/*.so*
+            install-static/lib/*.a
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 创建 Release 并上传所有产物
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
+          name: 手动编译产物-Android ${{ github.event.inputs.target_arch }}（静态+动态）
+          files: |
+            install-shared/lib/*.so*
+            install-static/lib/*.a
+          draft: true
+          prerelease: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
