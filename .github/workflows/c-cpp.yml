@@ -82,6 +82,10 @@ jobs:
             --host=${HOST} \
             --enable-shared \
             --disable-static \
+            --disable-coredump \
+            --disable-ptrace \
+            --disable-setjmp \
+            --disable-tests \
             --prefix=$(pwd)/../install-shared \
             CFLAGS="-D__ANDROID__ -fPIC -D_GNU_SOURCE" \
             LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
@@ -130,6 +134,10 @@ jobs:
             --host=${HOST} \
             --enable-static \
             --disable-shared \
+            --disable-coredump \
+            --disable-ptrace \
+            --disable-setjmp \
+            --disable-tests \
             --prefix=$(pwd)/../install-static \
             CFLAGS="-D__ANDROID__ -fPIC -D_GNU_SOURCE" \
             LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
