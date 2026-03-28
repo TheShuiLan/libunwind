@@ -57,88 +57,100 @@ jobs:
           loongarch64-linux-gnu-gcc --version
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
-      # 动态库编译（修改点：增加产物列表调试）
+      # 动态库编译（使用 autotools，仅生成共享库）
       - name: 编译 libunwind 动态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
+          # 清理并创建构建目录
+          rm -rf build-shared
           mkdir -p build-shared && cd build-shared
-          CMAKE_ARGS=(
-            -DCMAKE_C_STANDARD=11
-            -DCMAKE_BUILD_TYPE=Release
-            -DBUILD_SHARED_LIBS=ON
-            -DBUILD_STATIC_LIBS=OFF
-          )
+          
+          # 根据目标架构设置 --host 参数
           case ${TARGET} in
-            x86_64-linux-gnu)      CMAKE_ARGS+=(-DCMAKE_C_COMPILER=gcc) ;;
-            aarch64-linux-gnu)     CMAKE_ARGS+=(-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc) ;;
-            arm-linux-gnueabihf)   CMAKE_ARGS+=(-DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc) ;;
-            s390x-linux-gnu)       CMAKE_ARGS+=(-DCMAKE_C_COMPILER=s390x-linux-gnu-gcc) ;;
-            loongarch64-linux-gnu) CMAKE_ARGS+=(-DCMAKE_C_COMPILER=/usr/local/bin/loongarch64-linux-gnu-gcc) ;;
+            x86_64-linux-gnu)      HOST_ARG="" ;;
+            aarch64-linux-gnu)     HOST_ARG="--host=aarch64-linux-gnu" ;;
+            arm-linux-gnueabihf)   HOST_ARG="--host=arm-linux-gnueabihf" ;;
+            s390x-linux-gnu)       HOST_ARG="--host=s390x-linux-gnu" ;;
+            loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
-          cmake .. "${CMAKE_ARGS[@]}"
+          
+          # 运行 configure，强制生成共享库，禁用静态库
+          ../configure $HOST_ARG \
+            --enable-shared \
+            --disable-static \
+            --prefix=$(pwd)/install
+          
+          # 编译
           make -j$(nproc)
-          # 列出产物以便确认路径（关键调试信息）
+          
+          # 列出产物（通常位于 .libs 目录）
           echo "动态库产物列表："
           find . -name "*.so*" -type f
 
-      # 静态库编译
+      # 静态库编译（使用 autotools，仅生成静态库）
       - name: 编译 libunwind 静态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
+          # 清理并创建构建目录
+          rm -rf build-static
           mkdir -p build-static && cd build-static
-          CMAKE_ARGS=(
-            -DCMAKE_C_STANDARD=11
-            -DCMAKE_BUILD_TYPE=Release
-            -DBUILD_SHARED_LIBS=OFF
-            -DBUILD_STATIC_LIBS=ON
-          )
+          
+          # 根据目标架构设置 --host 参数
           case ${TARGET} in
-            x86_64-linux-gnu)      CMAKE_ARGS+=(-DCMAKE_C_COMPILER=gcc) ;;
-            aarch64-linux-gnu)     CMAKE_ARGS+=(-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc) ;;
-            arm-linux-gnueabihf)   CMAKE_ARGS+=(-DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc) ;;
-            s390x-linux-gnu)       CMAKE_ARGS+=(-DCMAKE_C_COMPILER=s390x-linux-gnu-gcc) ;;
-            loongarch64-linux-gnu) CMAKE_ARGS+=(-DCMAKE_C_COMPILER=/usr/local/bin/loongarch64-linux-gnu-gcc) ;;
+            x86_64-linux-gnu)      HOST_ARG="" ;;
+            aarch64-linux-gnu)     HOST_ARG="--host=aarch64-linux-gnu" ;;
+            arm-linux-gnueabihf)   HOST_ARG="--host=arm-linux-gnueabihf" ;;
+            s390x-linux-gnu)       HOST_ARG="--host=s390x-linux-gnu" ;;
+            loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
-          cmake .. "${CMAKE_ARGS[@]}"
+          
+          # 运行 configure，强制生成静态库，禁用共享库
+          ../configure $HOST_ARG \
+            --enable-static \
+            --disable-shared \
+            --prefix=$(pwd)/install
+          
+          # 编译
           make -j$(nproc)
+          
+          # 列出产物（通常位于 .libs 目录）
           echo "静态库产物列表："
           find . -name "*.a" -type f
 
-      # 上传动态库产物（修复路径：递归匹配）
+      # 上传动态库产物（修复路径：递归匹配 .libs 目录）
       - name: 上传动态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-shared
           path: |
-            build-shared/**/*.so
-            build-shared/**/*.so.*
+            build-shared/**/.libs/*.so
+            build-shared/**/.libs/*.so.*
           if-no-files-found: warn
           retention-days: 90
 
-      # 上传静态库产物（修复路径：递归匹配）
+      # 上传静态库产物（修复路径：递归匹配 .libs 目录）
       - name: 上传静态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-static
-          path: build-static/**/*.a
+          path: build-static/**/.libs/*.a
           if-no-files-found: warn
           retention-days: 90
 
-      # 合并上传（修复路径）
+      # 合并上传（同时包含 .so 和 .a）
       - name: 合并上传静态+动态库产物
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-all
           path: |
-            build-shared/**/*.so
-            build-shared/**/*.so.*
-            build-static/**/*.a
+            build-shared/**/.libs/*.so*
+            build-static/**/.libs/*.a
           if-no-files-found: warn
           retention-days: 90
 
-      # 创建 Release 并上传所有产物（修复路径）
+      # 创建 Release 并上传所有产物（使用递归匹配）
       - name: 创建 Release 并上传所有产物
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -146,8 +158,8 @@ jobs:
           tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
           name: 手动编译产物-${{ github.event.inputs.target_arch }}（静态+动态）
           files: |
-            build-shared/**/*.so*
-            build-static/**/*.a
+            build-shared/**/.libs/*.so*
+            build-static/**/.libs/*.a
           draft: true
           prerelease: true
           fail_on_unmatched_files: false
