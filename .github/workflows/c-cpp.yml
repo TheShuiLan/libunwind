@@ -60,13 +60,14 @@ jobs:
       - name: 生成 configure 脚本
         run: autoreconf -i
 
-      # 动态库编译
-      - name: 编译 libunwind 动态库（${{ github.event.inputs.target_arch }}）
+      # 动态库编译并安装
+      - name: 编译并安装 libunwind 动态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
-          rm -rf build-shared
-          mkdir -p build-shared && cd build-shared
+          rm -rf build-shared install-shared
+          mkdir -p build-shared install-shared
+          cd build-shared
           
           case ${TARGET} in
             x86_64-linux-gnu)      HOST_ARG="" ;;
@@ -76,30 +77,31 @@ jobs:
             loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
           
+          # 配置动态库编译，安装到 ../install-shared
           ../configure $HOST_ARG \
             --enable-shared \
             --disable-static \
-            --prefix=$(pwd)/install
+            --prefix=$(pwd)/../install-shared
           make -j$(nproc)
+          make install
           
-          echo "========== 动态库构建目录内容 =========="
-          ls -R
-          echo "========== 查找 .so 文件 =========="
-          find . -name "*.so*" -type f || true
+          echo "========== 动态库安装目录内容 =========="
+          find ../install-shared -type f
           
-          # 如果没有找到任何 .so 文件，则报错退出
-          if [ -z "$(find . -name '*.so*' -type f)" ]; then
-            echo "错误：未生成任何动态库文件！"
+          # 验证安装目录中是否存在 .so 文件
+          if [ -z "$(find ../install-shared -name '*.so*' -type f)" ]; then
+            echo "错误：动态库安装目录中未找到任何 .so 文件！"
             exit 1
           fi
 
-      # 静态库编译
-      - name: 编译 libunwind 静态库（${{ github.event.inputs.target_arch }}）
+      # 静态库编译并安装
+      - name: 编译并安装 libunwind 静态库（${{ github.event.inputs.target_arch }}）
         env:
           TARGET: ${{ github.event.inputs.target_arch }}
         run: |
-          rm -rf build-static
-          mkdir -p build-static && cd build-static
+          rm -rf build-static install-static
+          mkdir -p build-static install-static
+          cd build-static
           
           case ${TARGET} in
             x86_64-linux-gnu)      HOST_ARG="" ;;
@@ -109,55 +111,53 @@ jobs:
             loongarch64-linux-gnu) HOST_ARG="--host=loongarch64-linux-gnu" ;;
           esac
           
+          # 配置静态库编译，安装到 ../install-static
           ../configure $HOST_ARG \
             --enable-static \
             --disable-shared \
-            --prefix=$(pwd)/install
+            --prefix=$(pwd)/../install-static
           make -j$(nproc)
+          make install
           
-          echo "========== 静态库构建目录内容 =========="
-          ls -R
-          echo "========== 查找 .a 文件 =========="
-          find . -name "*.a" -type f || true
+          echo "========== 静态库安装目录内容 =========="
+          find ../install-static -type f
           
-          # 如果没有找到任何 .a 文件，则报错退出
-          if [ -z "$(find . -name '*.a' -type f)" ]; then
-            echo "错误：未生成任何静态库文件！"
+          # 验证安装目录中是否存在 .a 文件
+          if [ -z "$(find ../install-static -name '*.a' -type f)" ]; then
+            echo "错误：静态库安装目录中未找到任何 .a 文件！"
             exit 1
           fi
 
-      # 上传动态库产物（根据实际路径调整）
+      # 上传动态库产物（直接从安装目录收集）
       - name: 上传动态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-shared
-          path: |
-            build-shared/**/*.so
-            build-shared/**/*.so.*
-          if-no-files-found: warn
+          path: install-shared/lib/*.so*
+          if-no-files-found: error   # 改为 error，如果没找到直接失败
           retention-days: 90
 
-      # 上传静态库产物（根据实际路径调整）
+      # 上传静态库产物
       - name: 上传静态库产物到 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-static
-          path: build-static/**/*.a
-          if-no-files-found: warn
+          path: install-static/lib/*.a
+          if-no-files-found: error
           retention-days: 90
 
-      # 合并上传（使用通用递归匹配）
+      # 合并上传（同时包含 .so 和 .a）
       - name: 合并上传静态+动态库产物
         uses: actions/upload-artifact@v4
         with:
           name: libunwind-${{ github.event.inputs.target_arch }}-all
           path: |
-            build-shared/**/*.so*
-            build-static/**/*.a
-          if-no-files-found: warn
+            install-shared/lib/*.so*
+            install-static/lib/*.a
+          if-no-files-found: error
           retention-days: 90
 
-      # 创建 Release 并上传
+      # 创建 Release 并上传所有产物（从安装目录）
       - name: 创建 Release 并上传所有产物
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -165,8 +165,8 @@ jobs:
           tag_name: build-${{ github.run_id }}-${{ github.event.inputs.target_arch }}
           name: 手动编译产物-${{ github.event.inputs.target_arch }}（静态+动态）
           files: |
-            build-shared/**/*.so*
-            build-static/**/*.a
+            install-shared/lib/*.so*
+            install-static/lib/*.a
           draft: true
           prerelease: true
           fail_on_unmatched_files: false
