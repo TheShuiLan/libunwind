@@ -83,7 +83,7 @@ jobs:
             --enable-shared \
             --disable-static \
             --prefix=$(pwd)/../install-shared \
-            CFLAGS="-D__ANDROID__ -fPIC" \
+            CFLAGS="-D__ANDROID__ -fPIC -D_GNU_SOURCE" \
             LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
 
           make -j$(nproc)
@@ -131,7 +131,7 @@ jobs:
             --enable-static \
             --disable-shared \
             --prefix=$(pwd)/../install-static \
-            CFLAGS="-D__ANDROID__ -fPIC" \
+            CFLAGS="-D__ANDROID__ -fPIC -D_GNU_SOURCE" \
             LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
 
           make -j$(nproc)
