@@ -1,20 +1,48 @@
-# 在 "编译并安装动态库" 和 "编译并安装静态库" 步骤中，修改 API 变量
-# 例如将 API=21 改为 API=23 或更高（如 28）
-case ${ABI} in
-  arm64-v8a)
-    HOST="aarch64-linux-android"
-    API=23    # 从 21 改为 23
-    ;;
-  armeabi-v7a)
-    HOST="armv7a-linux-androideabi"
-    API=23
-    ;;
-  x86_64)
-    HOST="x86_64-linux-android"
-    API=23
-    ;;
-  x86)
-    HOST="i686-linux-android"
-    API=23
-    ;;
-esac
+- name: 编译并安装动态库（${{ github.event.inputs.target_arch }}）
+  env:
+    ABI: ${{ github.event.inputs.target_arch }}
+  run: |
+    rm -rf build-shared install-shared
+    mkdir -p build-shared install-shared
+    cd build-shared
+
+    # 根据 ABI 确定目标三元组和 API 级别
+    case ${ABI} in
+      arm64-v8a)
+        HOST="aarch64-linux-android"
+        API=23
+        ;;
+      armeabi-v7a)
+        HOST="armv7a-linux-androideabi"
+        API=23
+        ;;
+      x86_64)
+        HOST="x86_64-linux-android"
+        API=23
+        ;;
+      x86)
+        HOST="i686-linux-android"
+        API=23
+        ;;
+    esac
+
+    export CC=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang
+    export CXX=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++
+    export AR=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+    export RANLIB=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+    export LD=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/ld
+    export STRIP=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+
+    ../configure \
+      --host=${HOST} \
+      --enable-shared \
+      --disable-static \
+      --prefix=$(pwd)/../install-shared \
+      CFLAGS="-D__ANDROID__ -fPIC" \
+      LDFLAGS="-L${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${HOST}/${API}"
+
+    make -j$(nproc)
+    make install
+
+    echo "========== 动态库安装目录内容 =========="
+    find ../install-shared -type f
